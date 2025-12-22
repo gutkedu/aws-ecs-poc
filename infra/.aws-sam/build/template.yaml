@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS ECS POC Infrastructure
+Resources:
+  ApiEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: aws-ecs-poc-api
+      ImageScanningConfiguration:
+        ScanOnPush: true
+  WorkerEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: aws-ecs-poc-worker
+      ImageScanningConfiguration:
+        ScanOnPush: true
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      Policies:
+      - PolicyName: CodeBuildPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+  ApiCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: aws-ecs-poc-api-build
+      ServiceRole:
+        Fn::GetAtt:
+        - CodeBuildServiceRole
+        - Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+        - Name: AWS_DEFAULT_REGION
+          Value:
+            Ref: AWS::Region
+        - Name: API_REPO_URI
+          Value:
+            Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-ecs-poc-api
+      Source:
+        Type: GITHUB
+        Location:
+          Fn::Sub: https://github.com/${GitHubOwner}/${GitHubRepo}.git
+        GitCloneDepth: 1
+        BuildSpec: backend/api/buildspec.yml
+  WorkerCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: aws-ecs-poc-worker-build
+      ServiceRole:
+        Fn::GetAtt:
+        - CodeBuildServiceRole
+        - Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+        - Name: AWS_DEFAULT_REGION
+          Value:
+            Ref: AWS::Region
+        - Name: WORKER_REPO_URI
+          Value:
+            Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-ecs-poc-worker
+      Source:
+        Type: GITHUB
+        Location:
+          Fn::Sub: https://github.com/${GitHubOwner}/${GitHubRepo}.git
+        GitCloneDepth: 1
+        BuildSpec: backend/worker/buildspec.yml
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: gutkedu
+  GitHubRepo:
+    Type: String
+    Default: aws-ecs-poc
+Outputs:
+  ApiRepositoryUri:
+    Description: URI of the API ECR repository
+    Value:
+      Fn::GetAtt:
+      - ApiEcrRepository
+      - RepositoryUri
+  WorkerRepositoryUri:
+    Description: URI of the Worker ECR repository
+    Value:
+      Fn::GetAtt:
+      - WorkerEcrRepository
+      - RepositoryUri
+  ApiCodeBuildProjectName:
+    Description: Name of the API CodeBuild project
+    Value:
+      Ref: ApiCodeBuildProject
+  WorkerCodeBuildProjectName:
+    Description: Name of the Worker CodeBuild project
+    Value:
+      Ref: WorkerCodeBuildProject

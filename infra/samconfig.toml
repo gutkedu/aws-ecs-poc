@@ -1,0 +1,14 @@
+version = 0.1
+
+[gutkedu-terraform.deploy.parameters]
+stack_name = "ecs-study"
+resolve_s3 = true
+s3_prefix = "ecs-study"
+profile = "gutkedu-terraform"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "GitHubOwner=\"gutkedu\" GitHubRepo=\"aws-ecs-poc\""
+image_repositories = []
+
+[gutkedu-terraform.global.parameters]
+region = "us-east-1"
