@@ -4,14 +4,28 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'backend/api/**'
-      - 'backend/worker/**'
 
 jobs:
-  build-api:
+  changes:
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.modified + github.event.head_commit.added + github.event.head_commit.removed, 'backend/api/')
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      worker: ${{ steps.filter.outputs.worker }}
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dorny/paths-filter@v2
+      id: filter
+      with:
+        filters: |
+          api:
+            - 'backend/api/**'
+          worker:
+            - 'backend/worker/**'
+
+  build-api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
@@ -29,8 +43,9 @@ jobs:
         aws codebuild start-build --project-name aws-ecs-poc-api-build --source-version ${{ github.sha }}
 
   build-worker:
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
     runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.modified + github.event.head_commit.added + github.event.head_commit.removed, 'backend/worker/')
 
     steps:
     - name: Checkout code
