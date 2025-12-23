@@ -1,6 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: AWS ECS POC Infrastructure
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: gutkedu
+  GitHubRepo:
+    Type: String
+    Default: aws-ecs-poc
+Globals:
+  Function:
+    Timeout: 5
 Resources:
   ApiEcrRepository:
     Type: AWS::ECR::Repository
@@ -38,6 +48,277 @@ Resources:
             - logs:CreateLogStream
             - logs:PutLogEvents
             Resource: '*'
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: aws-ecs-poc-cluster
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+  ApiTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: ApiSqsPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - sqs:SendMessage
+            Resource:
+              Fn::GetAtt:
+              - SqsQueue
+              - Arn
+  WorkerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: WorkerSqsPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            Resource:
+              Fn::GetAtt:
+              - SqsQueue
+              - Arn
+  ApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: aws-ecs-poc-api
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      ExecutionRoleArn:
+        Fn::GetAtt:
+        - EcsTaskExecutionRole
+        - Arn
+      TaskRoleArn:
+        Fn::GetAtt:
+        - ApiTaskRole
+        - Arn
+      ContainerDefinitions:
+      - Name: api
+        Image:
+          Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-ecs-poc-api:latest
+        PortMappings:
+        - ContainerPort: 3000
+          Protocol: tcp
+        Environment:
+        - Name: SQS_QUEUE_URL
+          Value:
+            Ref: SqsQueue
+        - Name: AWS_REGION
+          Value:
+            Ref: AWS::Region
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: /ecs/aws-ecs-poc-api
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: ecs
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: aws-ecs-poc-worker
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      ExecutionRoleArn:
+        Fn::GetAtt:
+        - EcsTaskExecutionRole
+        - Arn
+      TaskRoleArn:
+        Fn::GetAtt:
+        - WorkerTaskRole
+        - Arn
+      ContainerDefinitions:
+      - Name: worker
+        Image:
+          Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/aws-ecs-poc-worker:latest
+        Environment:
+        - Name: SQS_QUEUE_URL
+          Value:
+            Ref: SqsQueue
+        - Name: AWS_REGION
+          Value:
+            Ref: AWS::Region
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: /ecs/aws-ecs-poc-worker
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: ecs
+  ApiService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: aws-ecs-poc-api-service
+      Cluster:
+        Ref: EcsCluster
+      TaskDefinition:
+        Ref: ApiTaskDefinition
+      DesiredCount: 0
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - Ref: EcsSecurityGroup
+          Subnets:
+          - Ref: PublicSubnet1
+          - Ref: PublicSubnet2
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: aws-ecs-poc-worker-service
+      Cluster:
+        Ref: EcsCluster
+      TaskDefinition:
+        Ref: WorkerTaskDefinition
+      DesiredCount: 0
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - Ref: EcsSecurityGroup
+          Subnets:
+          - Ref: PublicSubnet1
+          - Ref: PublicSubnet2
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs: ''
+      MapPublicIpOnLaunch: true
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs: ''
+      MapPublicIpOnLaunch: true
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: Vpc
+      InternetGatewayId:
+        Ref: InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: Vpc
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId:
+        Ref: InternetGateway
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnet1
+      RouteTableId:
+        Ref: PublicRouteTable
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnet2
+      RouteTableId:
+        Ref: PublicRouteTable
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS services
+      VpcId:
+        Ref: Vpc
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3000
+        ToPort: 3000
+        CidrIp: '0.0.0.0/0'
+  SqsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: aws-ecs-poc-queue
+      VisibilityTimeout: 30
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+          - SqsDlq
+          - Arn
+        maxReceiveCount: 3
+  SqsDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: aws-ecs-poc-dlq
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/aws-ecs-poc-api
+      RetentionInDays: 30
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/aws-ecs-poc-worker
+      RetentionInDays: 30
   ApiCodeBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -94,13 +375,6 @@ Resources:
           Fn::Sub: https://github.com/${GitHubOwner}/${GitHubRepo}.git
         GitCloneDepth: 1
         BuildSpec: backend/worker/buildspec.yml
-Parameters:
-  GitHubOwner:
-    Type: String
-    Default: gutkedu
-  GitHubRepo:
-    Type: String
-    Default: aws-ecs-poc
 Outputs:
   ApiRepositoryUri:
     Description: URI of the API ECR repository
@@ -114,11 +388,11 @@ Outputs:
       Fn::GetAtt:
       - WorkerEcrRepository
       - RepositoryUri
-  ApiCodeBuildProjectName:
-    Description: Name of the API CodeBuild project
+  SqsQueueUrl:
+    Description: URL of the SQS queue
     Value:
-      Ref: ApiCodeBuildProject
-  WorkerCodeBuildProjectName:
-    Description: Name of the Worker CodeBuild project
+      Ref: SqsQueue
+  SqsDlqUrl:
+    Description: URL of the SQS DLQ
     Value:
-      Ref: WorkerCodeBuildProject
+      Ref: SqsDlq
