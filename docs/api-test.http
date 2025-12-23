@@ -1,0 +1,14 @@
+### Health Check
+GET http://54.224.144.9:3000/health
+
+###
+
+### Send Message
+POST http://54.224.144.9:3000/messages
+Content-Type: application/json
+
+{
+  "message": "Hello from VSCode REST Client!"
+}
+
+###

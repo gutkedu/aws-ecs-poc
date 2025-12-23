@@ -223,6 +223,108 @@ Resources:
             - !Ref PublicSubnet1
             - !Ref PublicSubnet2
 
+  WorkerScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: WorkerService
+    Properties:
+      MinCapacity: 0
+      MaxCapacity: 10
+      ResourceId: service/aws-ecs-poc-cluster/aws-ecs-poc-worker-service
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt AutoScalingRole.Arn
+
+  WorkerScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: WorkerScalableTarget
+    Properties:
+      PolicyName: WorkerScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref WorkerScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 1.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: SQSQueueMessagesVisiblePerTask
+          ResourceLabel: !Sub ${SqsQueue.QueueName}
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+  WorkerScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: WorkerScalableTarget
+    Properties:
+      PolicyName: WorkerScaleOutPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref WorkerScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+
+  WorkerScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: WorkerScalableTarget
+    Properties:
+      PolicyName: WorkerScaleInPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref WorkerScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ExactCapacity
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 0
+            ScalingAdjustment: 0
+
+  ScaleOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WorkerScaleOutAlarm
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SqsQueue.QueueName
+      Period: 60
+      Statistic: Average
+      Threshold: 1
+      AlarmActions:
+        - !Ref WorkerScaleOutPolicy
+
+  ScaleInAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: WorkerScaleInAlarm
+      ComparisonOperator: LessThanThreshold
+      EvaluationPeriods: 5
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SqsQueue.QueueName
+      Period: 60
+      Statistic: Average
+      Threshold: 1
+      AlarmActions:
+        - !Ref WorkerScaleInPolicy
+
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
 ######
 ####### NETWORKING #########
 ######
