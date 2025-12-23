@@ -239,21 +239,6 @@ Resources:
       ServiceNamespace: ecs
       RoleARN: !GetAtt AutoScalingRole.Arn
 
-  WorkerScalingPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    DependsOn: WorkerScalableTarget
-    Properties:
-      PolicyName: WorkerScalingPolicy
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref WorkerScalableTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 1.0
-        PredefinedMetricSpecification:
-          PredefinedMetricType: SQSQueueMessagesVisiblePerTask
-          ResourceLabel: !Sub ${SqsQueue.QueueName}
-        ScaleInCooldown: 60
-        ScaleOutCooldown: 60
-
   WorkerScaleOutPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
     DependsOn: WorkerScalableTarget
@@ -279,9 +264,7 @@ Resources:
         AdjustmentType: ExactCapacity
         MetricAggregationType: Average
         StepAdjustments:
-          - MetricIntervalLowerBound: 0
-            MetricIntervalUpperBound: 0
-            ScalingAdjustment: 0
+          - ScalingAdjustment: 0
 
   ScaleOutAlarm:
     Type: AWS::CloudWatch::Alarm
