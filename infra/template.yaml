@@ -196,15 +196,20 @@ Resources:
 
   ApiService:
     Type: AWS::ECS::Service
+    DependsOn: ApiListener
     Properties:
       ServiceName: aws-ecs-poc-api-service
       Cluster: !Ref EcsCluster
       TaskDefinition: !Ref ApiTaskDefinition
-      DesiredCount: 0
+      DesiredCount: 1
       LaunchType: FARGATE
+      LoadBalancers:
+        - TargetGroupArn: !Ref ApiTargetGroup
+          ContainerName: api
+          ContainerPort: 3000
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
           SecurityGroups:
             - !Ref EcsSecurityGroup
           Subnets:
@@ -241,7 +246,6 @@ Resources:
 
   WorkerScaleOutPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    DependsOn: WorkerScalableTarget
     Properties:
       PolicyName: WorkerScaleOutPolicy
       PolicyType: StepScaling
@@ -255,16 +259,16 @@ Resources:
 
   WorkerScaleInPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    DependsOn: WorkerScalableTarget
     Properties:
       PolicyName: WorkerScaleInPolicy
       PolicyType: StepScaling
       ScalingTargetId: !Ref WorkerScalableTarget
       StepScalingPolicyConfiguration:
-        AdjustmentType: ExactCapacity
+        AdjustmentType: ChangeInCapacity
         MetricAggregationType: Average
         StepAdjustments:
-          - ScalingAdjustment: 0
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
 
   ScaleOutAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -299,6 +303,73 @@ Resources:
       Threshold: 1
       AlarmActions:
         - !Ref WorkerScaleInPolicy
+
+  ApiLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: aws-ecs-poc-api-alb
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: aws-ecs-poc-api-tg
+      Protocol: HTTP
+      Port: 3000
+      VpcId: !Ref Vpc
+      HealthCheckPath: /health
+      TargetType: ip
+
+  ApiListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApiLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+
+  ApiScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 10
+      ResourceId: !Sub service/${EcsCluster}/${ApiService}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt AutoScalingRole.Arn
+
+  ApiScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ApiScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ApiScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 1000.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Sub ${ApiTargetGroup}/targetgroup/${ApiTargetGroup}
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
 
   AutoScalingRole:
     Type: AWS::IAM::Role
@@ -382,7 +453,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 3000
           ToPort: 3000
-          CidrIp: 0.0.0.0/0
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
 
 ######
 ####### SQS #########
@@ -406,19 +477,22 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /ecs/aws-ecs-poc-api
-      RetentionInDays: 30
+      RetentionInDays: 1
 
   WorkerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /ecs/aws-ecs-poc-worker
-      RetentionInDays: 30
+      RetentionInDays: 1
 
   ApiCodeBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: aws-ecs-poc-api-build
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      LogsConfig:
+        CloudWatchLogs:
+          Status: DISABLED
       Artifacts:
         Type: NO_ARTIFACTS
       Environment:
@@ -442,6 +516,9 @@ Resources:
     Properties:
       Name: aws-ecs-poc-worker-build
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      LogsConfig:
+        CloudWatchLogs:
+          Status: DISABLED
       Artifacts:
         Type: NO_ARTIFACTS
       Environment:
@@ -472,6 +549,9 @@ Outputs:
   WorkerRepositoryUri:
     Description: URI of the Worker ECR repository
     Value: !GetAtt WorkerEcrRepository.RepositoryUri
+  ApiLoadBalancerUrl:
+    Description: URL of the API Application Load Balancer
+    Value: !Sub 'http://${ApiLoadBalancer.DNSName}'
   SqsQueueUrl:
     Description: URL of the SQS queue
     Value: !Ref SqsQueue
